@@ -36,3 +36,19 @@ fix src/index.ts @Web use pnpm. do NOT touch packages.json. use genkit tool for 
 ---
 
 testGame() should continue the game until there is a winner
+
+---
+
+i want for only one player agent to talk per turn (the 1st agent tagged by last agent), not all of them.
+
+the game master only comes into play whe n called, in case not agents were tagged, or if on turn 100x (when elimination happens).
+
+when eliminating agents, use role appropriate wording (ex: kill, eliminate, rekt, dsiqualified - depending on game played)
+
+---
+
+keep a Set ordered list of multiple next players, not just immediate next
+
+---
+
+remember that at each 100th turn - game masters forces a player out, even if not his turn

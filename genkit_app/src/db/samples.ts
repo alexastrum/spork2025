@@ -1,63 +1,136 @@
+import { ai } from "../genkit/ai";
 import { db } from "./index";
 import { usersTable } from "./schema";
 
-// Sample user data
-export async function createSampleUsers() {
-  const users = [
-    {
-      handle: "player1",
-      data: {
-        prompt:
-          "You are a strategic player who always thinks several moves ahead. You are diplomatic but cunning.",
-        tokens: 1000,
-      },
-    },
-    {
-      handle: "player2",
-      data: {
-        prompt:
-          "You are an aggressive player who takes risks. You speak in short, direct sentences and like to challenge others.",
-        tokens: 1000,
-      },
-    },
-    {
-      handle: "player3",
-      data: {
-        prompt:
-          "You are a cautious player who analyzes every situation carefully. You are verbose and thoughtful in your responses.",
-        tokens: 1000,
-      },
-    },
-    {
-      handle: "player4",
-      data: {
-        prompt:
-          "You are a chaotic player who makes unpredictable moves. You often use humor and sarcasm in your responses.",
-        tokens: 1000,
-      },
-    },
-    {
-      handle: "player5",
-      data: {
-        prompt:
-          "You are a cooperative player who tries to form alliances. You are friendly and supportive in your interactions.",
-        tokens: 1000,
-      },
-    },
-  ];
+/** Generate a handle using AI */
+async function generateAIHandle(index: number): Promise<string> {
+  // Generate a creative handle using GenKit
+  const handlePrompt = `Generate a single unique username/handle for a player in a competitive game. 
+  The handle should be creative, memorable, and between 3-15 characters.
+  It should feel like a genuine online gaming handle that a player might choose.
+  Return ONLY the handle, with no explanation or additional text.
+  Make it unique - don't use common handles like "Player1" or generic terms.
+  Examples of good handles: "NightStalker", "QuantumQuasar", "FrostByte", "ShadowWeaver", "PixelPunisher"`;
 
-  for (const user of users) {
-    await db.insert(usersTable).values(user).onConflictDoNothing();
+  try {
+    const response = await ai.generate({
+      prompt: handlePrompt,
+    });
+
+    // Clean up the response to ensure it's a valid handle
+    let handle = (response.text || "").trim();
+
+    // Remove any quotes or extra characters
+    handle = handle.replace(/["']/g, "");
+
+    // If the AI didn't generate a valid handle, use a fallback
+    if (!handle || handle.length < 3 || handle.length > 20) {
+      const prefixes = ["Agent", "Player", "Gamer", "Bot"];
+      const suffix = Math.floor(Math.random() * 1000);
+      handle = `${
+        prefixes[Math.floor(Math.random() * prefixes.length)]
+      }${suffix}`;
+    }
+
+    // Add index to ensure uniqueness if multiple handles are generated in the same run
+    return `${handle}${index}`;
+  } catch (error) {
+    console.error("Error generating AI handle:", error);
+    // Fallback to simple random handle
+    const prefixes = ["Agent", "Player", "User", "Gamer", "Bot"];
+    const suffix = Math.floor(Math.random() * 1000);
+    return `${prefixes[Math.floor(Math.random() * prefixes.length)]}${suffix}`;
   }
-
-  return await db.select().from(usersTable);
 }
 
-// Sample game master prompts
-export const gameMasterPrompts = [
-  "You are the Game Master of a survival challenge. Your role is to create interesting scenarios and challenges for the players. You must be fair but challenging, and you should create a narrative that keeps players engaged. When it's time to eliminate a player, choose the one who has contributed least to the game or made the most mistakes.",
-  "You are the Game Master of a debate competition. Your role is to propose controversial topics and moderate the discussion between players. You should ensure all players get equal speaking time and evaluate the quality of their arguments. When it's time to eliminate a player, choose the one with the weakest arguments or poorest debate skills.",
-  "You are the Game Master of a mystery solving game. Your role is to create an intricate mystery and provide clues to the players. You should evaluate how well players connect the dots and develop theories. When it's time to eliminate a player, choose the one who has made the least progress in solving the mystery.",
-  "You are the Game Master of a creative storytelling game. Your role is to start a story and have players continue it in interesting ways. You should evaluate the creativity and coherence of their contributions. When it's time to eliminate a player, choose the one whose contributions were least creative or disrupted the story flow.",
-  "You are the Game Master of a strategic resource management game. Your role is to create scenarios where players must make decisions about resource allocation. You should evaluate the efficiency and effectiveness of their strategies. When it's time to eliminate a player, choose the one whose strategy was least effective.",
-];
+export async function createSampleUsers(): Promise<
+  {
+    handle: string;
+    prompt: string;
+    tokens: number;
+  }[]
+> {
+  // Generate 3-5 random users
+  const numUsers = Math.floor(Math.random() * 3) + 3; // 3 to 5 users
+  const users = [];
+
+  // Generate character prompts using GenKit
+  const characterPrompt = `Create a unique character for an AI agent in a text-based game. 
+  The character should have a distinct personality, background, and motivations.
+  Format the response as a concise character description that can be used as a prompt for the AI agent.
+  Make the character interesting, with clear goals and a unique voice.
+  Keep the description under 200 words.`;
+
+  for (let i = 0; i < numUsers; i++) {
+    // Generate AI handle
+    const handle = await generateAIHandle(i);
+
+    // Generate character prompt using GenKit
+    const response = await ai.generate({
+      prompt: characterPrompt,
+    });
+
+    const prompt =
+      response.text ||
+      `I am ${handle}, a strategic player who aims to win by making alliances and breaking them at the right time.`;
+
+    // Create user with random token amount (100-500)
+    const tokens = Math.floor(Math.random() * 401) + 100;
+
+    const user = {
+      handle,
+      prompt,
+      tokens,
+    };
+
+    users.push(user);
+
+    // Insert user into database
+    await db.insert(usersTable).values({
+      handle: user.handle,
+      data: {
+        prompt: user.prompt,
+        tokens: user.tokens,
+      },
+    });
+  }
+
+  console.log(`Created ${users.length} sample users`);
+  return users;
+}
+
+export async function createSampleGameMasterPrompts(): Promise<string> {
+  // Generate a random game scenario using GenKit
+  const gameTypes = [
+    "survival game",
+    "mystery investigation",
+    "fantasy adventure",
+    "political intrigue",
+    "space exploration",
+    "post-apocalyptic scenario",
+    "supernatural horror",
+    "competitive tournament",
+  ];
+
+  const selectedGameType =
+    gameTypes[Math.floor(Math.random() * gameTypes.length)];
+
+  const gameMasterPromptTemplate = `Create a game master prompt for a ${selectedGameType} scenario.
+  The prompt should establish the setting, rules, and objectives for the players.
+  Players will be AI agents competing against each other, with only one winner at the end.
+  Include specific details about the environment, challenges, and win conditions.
+  The game master should have a distinct personality and tone appropriate for the ${selectedGameType}.
+  Keep the prompt under 300 words.`;
+
+  // Generate game master prompt using GenKit
+  const response = await ai.generate({
+    prompt: gameMasterPromptTemplate,
+  });
+
+  const gameMasterPrompt =
+    response.text ||
+    `Welcome to the Agent Arena! This is a ${selectedGameType} where only one player will survive. Use strategy, form alliances, and outsmart your opponents to be the last one standing. The winner takes all the tokens minus a 10% fee. Good luck!`;
+
+  console.log("Generated game master prompt:", gameMasterPrompt);
+  return gameMasterPrompt;
+}

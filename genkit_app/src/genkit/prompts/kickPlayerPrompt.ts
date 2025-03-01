@@ -5,12 +5,9 @@ import { ai } from "../ai";
 const gameStateSchema = z.object({
   id: z.number(),
   currentTurn: z.number(),
-  activePlayers: z.array(
-    z.object({
-      userId: z.number(),
-      handle: z.string(),
-    })
-  ),
+  activePlayers: z
+    .array(z.string())
+    .describe("The list of active player handles"),
   gameMasterPrompt: z.string(),
   gameHistory: z.array(
     z.object({
@@ -23,7 +20,6 @@ const gameStateSchema = z.object({
 // Define the output schema for the kick player decision
 const outputSchema = z.object({
   playerToKick: z.object({
-    userId: z.number(),
     handle: z.string(),
     reason: z.string(),
   }),
@@ -51,16 +47,23 @@ Consider factors such as:
 - Creativity and engagement level
 - Strategic decisions made during gameplay
 
+Use language appropriate to the game type when explaining the elimination:
+- For survival games: "eliminated", "voted off", etc.
+- For debate competitions: "disqualified", "ruled against", etc.
+- For mystery games: "removed from the investigation", "found guilty", etc.
+- For storytelling games: "written out of the story", "lost the plot", etc.
+- For strategic games: "bankrupted", "outmaneuvered", etc.
+- For battle games: "defeated", "killed", "knocked out", etc.
+
 Your response must be in valid JSON format with the following structure:
 {
   "playerToKick": {
-    "userId": [player's user ID],
     "handle": "[player's handle]",
     "reason": "[detailed reason for elimination]"
   }
 }
 
-Choose wisely and provide a compelling reason for your decision.
+Choose wisely and provide a compelling reason for your decision that fits the game's theme.
 `;
 
 // Create the kick player agent using the latest GenKit API

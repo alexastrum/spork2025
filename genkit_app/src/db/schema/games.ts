@@ -27,7 +27,9 @@ export const gamesTable = pgTable("games", {
   }>(),
   currentData: jsonb("current_data").notNull().$type<{
     currentTurn: number;
-    activePlayers: number[];
+    activePlayers: string[];
+    nextPlayer: string;
+    lastEliminationTurn: number;
   }>(),
   winner: integer("winner").references(() => usersTable.id),
 });
@@ -47,7 +49,9 @@ export const insertGameSchema = createInsertSchema(gamesTable, {
   }),
   currentData: z.object({
     currentTurn: z.number().int().nonnegative(),
-    activePlayers: z.array(z.number().int().positive()),
+    activePlayers: z.array(z.string()),
+    nextPlayer: z.string(),
+    lastEliminationTurn: z.number().int().nonnegative(),
   }),
 });
 
@@ -65,7 +69,9 @@ export const selectGameSchema = createSelectSchema(gamesTable, {
   }),
   currentData: z.object({
     currentTurn: z.number().int(),
-    activePlayers: z.array(z.number().int()),
+    activePlayers: z.array(z.string()),
+    nextPlayer: z.string(),
+    lastEliminationTurn: z.number().int(),
   }),
 });
 

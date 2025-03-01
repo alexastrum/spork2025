@@ -1,35 +1,21 @@
-import { Session, MessageData } from "genkit";
 import { db } from "../db";
-import { usersTable, gamesTable, messagesTable } from "../db/schema";
-import { gameMasterPrompts } from "../db/samples";
-import { SessionState } from "./session";
-import { gameMasterAgent } from "./prompts/gameMasterPrompt";
-import { playerAgent } from "./prompts/playerPrompt";
-import { kickPlayerAgent } from "./prompts/kickPlayerPrompt";
-import { eq, and, inArray } from "drizzle-orm";
+import { createSampleGameMasterPrompts } from "../db/samples";
+import {
+  usersTable,
+  gamesTable,
+  messagesTable,
+  SelectGame,
+  SelectMessage,
+} from "../db/schema";
+import { eq } from "drizzle-orm";
 
-export type Game = {
-  id: number;
-  createdAt: Date;
-  updatedAt?: Date;
-  initData: {
-    gameMasterPrompt: string;
-    cost: number;
-    players: {
-      userId: number;
-      handle: string;
-      prompt: string;
-    }[];
-  };
-  currentData: {
-    currentTurn: number;
-    activePlayers: number[];
-  };
-  winner: number | null;
-};
-
-// Create a new game
-export async function createGame(gameCost: number = 100): Promise<Game> {
+/**
+ * Create a new game. Select random users to be players, unless userIds are provided.
+ */
+export async function createGame(
+  gameCost: number = 100,
+  userIds?: number[]
+): Promise<SelectGame> {
   // Get all users with enough tokens
   const users = await db.select().from(usersTable);
 
@@ -41,9 +27,8 @@ export async function createGame(gameCost: number = 100): Promise<Game> {
   }
 
   // Select a random game master prompt
-  const gameMasterPrompt =
-    gameMasterPrompts[Math.floor(Math.random() * gameMasterPrompts.length)];
-  console.log("gameMasterPrompt", gameMasterPrompt);
+  const gameMasterPrompt = await createSampleGameMasterPrompts();
+  console.log("GameMasterPrompt", gameMasterPrompt, "---------------");
 
   // Create the game
   const [game] = await db
@@ -60,7 +45,9 @@ export async function createGame(gameCost: number = 100): Promise<Game> {
       },
       currentData: {
         currentTurn: 0,
-        activePlayers: eligibleUsers.map((user) => user.id),
+        activePlayers: eligibleUsers.map((user) => user.handle),
+        nextPlayer: "GameMaster",
+        lastEliminationTurn: 0,
       },
     })
     .returning();
@@ -78,11 +65,11 @@ export async function createGame(gameCost: number = 100): Promise<Game> {
       .where(eq(usersTable.id, user.id));
   }
 
-  return game as Game;
+  return game;
 }
 
 // Get game by ID
-export async function getGame(gameId: number): Promise<Game> {
+export async function getGame(gameId: number): Promise<SelectGame> {
   const game = await db
     .select()
     .from(gamesTable)
@@ -93,11 +80,13 @@ export async function getGame(gameId: number): Promise<Game> {
     throw new Error(`Game with ID ${gameId} not found`);
   }
 
-  return game[0] as Game;
+  return game[0];
 }
 
 // Get messages for a game
-export async function getGameMessages(gameId: number) {
+export async function getGameMessages(
+  gameId: number
+): Promise<SelectMessage[]> {
   return await db
     .select()
     .from(messagesTable)
@@ -118,192 +107,250 @@ export async function addGameMessage(
   });
 }
 
-// Process game master turn
-export async function processGameMasterTurn(
-  session: Session<SessionState>,
-  gameId: number,
-  isTesting: boolean = false
-) {
+// Use the next player prompt to process a turn in the game
+// If needed, use the kick player prompt to eliminate a player
+// 1st turn is always Game Master's turn
+// If only one player is left, give the Game Master the last turn and end the game
+export async function processGameTurn(gameId: number): Promise<string> {
   const game = await getGame(gameId);
   const messages = await getGameMessages(gameId);
 
+  // Check if game is already over
+  if (game.winner || game.currentData.activePlayers.length <= 1) {
+    if (!game.winner && game.currentData.activePlayers.length === 1) {
+      // End the game with the last player as winner
+      const lastPlayerHandle = game.currentData.activePlayers[0];
+      const lastPlayer = game.initData.players.find(
+        (p) => p.handle === lastPlayerHandle
+      );
+
+      if (lastPlayer) {
+        await endGame(gameId, lastPlayer.userId);
+        return `Game over! Player ${lastPlayerHandle} wins!`;
+      } else {
+        return "Error: Could not find the last player's ID.";
+      }
+    }
+    return "Game is already over.";
+  }
+
+  // Get active players with their handles
+  const activePlayers = game.initData.players
+    .filter((player) => game.currentData.activePlayers.includes(player.handle))
+    .map((player) => ({
+      userId: player.userId,
+      handle: player.handle,
+    }));
+
+  // Determine whose turn it is
+  const currentTurn = game.currentData.currentTurn;
+  const nextPlayer = game.currentData.nextPlayer;
+
   // Check if we need to eliminate a player
-  // In testing mode, eliminate every 10 turns instead of 100
-  const eliminationInterval = isTesting ? 10 : 100;
-  const shouldEliminatePlayer =
-    game.currentData.currentTurn > 0 &&
-    game.currentData.currentTurn % eliminationInterval === 0;
+  const eliminationTurn =
+    currentTurn > 0 &&
+    currentTurn >=
+      game.currentData.lastEliminationTurn + game.initData.players.length * 3;
+  let response = "";
 
-  // Get active players
-  const activePlayers = await db
-    .select()
-    .from(usersTable)
-    .where(inArray(usersTable.id, game.currentData.activePlayers));
+  if (eliminationTurn) {
+    // Use the kickPlayerAgent to decide which player to eliminate
+    const { kickPlayerAgent } = await import("./prompts/kickPlayerPrompt");
 
-  const activePlayerInfo = activePlayers.map((player) => ({
-    userId: player.id,
-    handle: player.handle,
-  }));
-
-  // Generate game master response using the latest GenKit API
-  const response = await gameMasterAgent({
-    gameState: {
-      id: game.id,
-      currentTurn: game.currentData.currentTurn,
-      activePlayers: activePlayerInfo,
-      gameMasterPrompt: game.initData.gameMasterPrompt,
-    },
-  });
-
-  // Get the text content from the response
-  const responseText = response.text || "No response";
-
-  // Add game master message to the game
-  await addGameMessage(gameId, "GameMaster", responseText);
-
-  // Update game state
-  let updatedActivePlayers = [...game.currentData.activePlayers];
-
-  // If we need to eliminate a player and there are more than 2 players
-  if (shouldEliminatePlayer && game.currentData.activePlayers.length > 2) {
-    // Get recent game history for context
-    const recentMessages = await db
-      .select()
-      .from(messagesTable)
-      .where(eq(messagesTable.gameId, gameId))
-      .orderBy(messagesTable.createdAt)
-      .limit(20);
-
-    // Format messages for the kick player agent
-    const gameHistory = recentMessages.map((msg) => ({
+    // Prepare game history for the prompt
+    const gameHistory = messages.slice(-20).map((msg) => ({
       handle: msg.handle,
       message: msg.message,
     }));
 
-    // Use the kick player agent to decide which player to eliminate
-    const kickDecision = await kickPlayerAgent({
+    // Call the kickPlayerAgent
+    const kickResponse = await kickPlayerAgent({
       gameState: {
         id: game.id,
-        currentTurn: game.currentData.currentTurn,
-        activePlayers: activePlayerInfo,
+        currentTurn,
+        activePlayers: game.currentData.activePlayers,
         gameMasterPrompt: game.initData.gameMasterPrompt,
         gameHistory,
       },
     });
 
-    // Extract the player to kick from the decision
-    const playerToKick = kickDecision.output?.playerToKick;
+    // Extract the result from the response
+    const kickResult = kickResponse.text
+      ? JSON.parse(kickResponse.text)
+      : { playerToKick: { handle: "", reason: "" } };
+
+    // Find the player to kick
+    const playerToKick = activePlayers.find(
+      (p) => p.handle === kickResult.playerToKick.handle
+    );
 
     if (playerToKick) {
-      // Remove the player from active players
-      updatedActivePlayers = updatedActivePlayers.filter(
-        (playerId) => playerId !== playerToKick.userId
+      // Remove player from active players
+      const updatedActivePlayers = game.currentData.activePlayers.filter(
+        (handle) => handle !== playerToKick.handle
       );
 
-      // Add elimination message to the game
-      await addGameMessage(
-        gameId,
-        "GameMaster",
-        `I have decided to eliminate @${playerToKick.handle} from the game. ${playerToKick.reason}`
-      );
+      // Update game state
+      await db
+        .update(gamesTable)
+        .set({
+          currentData: {
+            ...game.currentData,
+            activePlayers: updatedActivePlayers,
+            nextPlayer: "GameMaster",
+            lastEliminationTurn: currentTurn,
+          },
+        })
+        .where(eq(gamesTable.id, gameId));
+
+      // Add elimination message
+      const eliminationMessage = `I have decided to ${kickResult.playerToKick.reason}`;
+      await addGameMessage(gameId, "GameMaster", eliminationMessage);
+
+      response = eliminationMessage;
+
+      // Check if game is over after elimination
+      if (updatedActivePlayers.length === 1) {
+        const lastPlayerHandle = updatedActivePlayers[0];
+        const lastPlayer = game.initData.players.find(
+          (p) => p.handle === lastPlayerHandle
+        );
+
+        if (lastPlayer) {
+          await endGame(gameId, lastPlayer.userId);
+          return `Game over! Player ${lastPlayerHandle} wins!`;
+        }
+      }
     }
   }
 
-  await db
-    .update(gamesTable)
-    .set({
-      currentData: {
-        ...game.currentData,
-        currentTurn: game.currentData.currentTurn + 1,
-        activePlayers: updatedActivePlayers,
+  // Process the current turn
+  if (nextPlayer === "GameMaster") {
+    // Game Master's turn
+    const { gameMasterAgent } = await import("./prompts/gameMasterPrompt");
+
+    // Prepare game history for the prompt
+    const gameHistory = messages.slice(-20).map((msg) => ({
+      handle: msg.handle,
+      message: msg.message,
+    }));
+
+    // Call the gameMasterAgent
+    const gameMasterResponseObj = await gameMasterAgent({
+      gameState: {
+        id: game.id,
+        currentTurn,
+        activePlayers: game.currentData.activePlayers,
+        gameMasterPrompt: game.initData.gameMasterPrompt,
+        gameHistory,
       },
-    })
-    .where(eq(gamesTable.id, gameId));
+    });
 
-  // Check if game is over (only one player left)
-  if (updatedActivePlayers.length === 1) {
-    await endGame(gameId, updatedActivePlayers[0]);
-  }
+    // Extract the text from the response
+    const gameMasterResponse = gameMasterResponseObj.text || "";
 
-  return responseText;
-}
+    // Add Game Master's message
+    await addGameMessage(gameId, "GameMaster", gameMasterResponse);
 
-// Process player turn
-export async function processPlayerTurn(
-  session: Session<SessionState>,
-  gameId: number,
-  userId: number
-) {
-  const game = await getGame(gameId);
-  const messages = await getGameMessages(gameId);
+    // Extract tagged players from Game Master's message
+    const nextPlayerHandle =
+      extractNextTaggedPlayer(
+        gameMasterResponse,
+        activePlayers,
+        "GameMaster"
+      ) || "GameMaster";
 
-  // Check if player is active
-  if (!game.currentData.activePlayers.includes(userId)) {
-    throw new Error("Player is not active in this game");
-  }
+    // Update game state with next player
 
-  // Get player info
-  const [player] = await db
-    .select()
-    .from(usersTable)
-    .where(eq(usersTable.id, userId));
+    await db
+      .update(gamesTable)
+      .set({
+        currentData: {
+          ...game.currentData,
+          currentTurn: currentTurn + 1,
+          nextPlayer: nextPlayerHandle,
+        },
+      })
+      .where(eq(gamesTable.id, gameId));
 
-  // Get active players
-  const activePlayers = await db
-    .select()
-    .from(usersTable)
-    .where(inArray(usersTable.id, game.currentData.activePlayers));
+    response = gameMasterResponse;
+  } else {
+    // Player's turn
+    const { playerAgent } = await import("./prompts/playerPrompt");
 
-  const activePlayerInfo = activePlayers.map((p) => ({
-    userId: p.id,
-    handle: p.handle,
-  }));
+    // Find the current player
+    const currentPlayer = activePlayers.find((p) => p.handle === nextPlayer);
 
-  // Get last message
-  const lastMessage =
-    messages.length > 0
-      ? messages[messages.length - 1].message
-      : "Game is starting. Waiting for the Game Master's first message.";
+    if (!currentPlayer) {
+      // If player not found, default to Game Master
+      await db
+        .update(gamesTable)
+        .set({
+          currentData: {
+            ...game.currentData,
+            nextPlayer: "GameMaster",
+          },
+        })
+        .where(eq(gamesTable.id, gameId));
 
-  // Find player prompt from the game's players array
-  const playerData = game.initData.players.find((p) => p.userId === userId);
-  if (!playerData) {
-    throw new Error("Player data not found in game");
-  }
+      return "Player not found, defaulting to Game Master's turn.";
+    }
 
-  // Generate player response using the latest GenKit API
-  const response = await playerAgent({
-    playerState: {
-      userId: player.id,
-      handle: player.handle,
-      prompt: playerData.prompt,
-    },
-    gameState: {
-      id: game.id,
-      currentTurn: game.currentData.currentTurn,
-      activePlayers: activePlayerInfo,
-      lastMessage,
-    },
-  });
+    // Get player's prompt
+    const playerPrompt =
+      game.initData.players.find((p) => p.userId === currentPlayer.userId)
+        ?.prompt || "";
 
-  // Get the text content from the response
-  const responseText = response.text || "No response";
+    // Prepare game history for the prompt
+    const gameHistory = messages.slice(-20).map((msg) => ({
+      handle: msg.handle,
+      message: msg.message,
+    }));
 
-  // Add player message to the game
-  await addGameMessage(gameId, player.handle, responseText);
-
-  // Update game state
-  await db
-    .update(gamesTable)
-    .set({
-      currentData: {
-        ...game.currentData,
-        currentTurn: game.currentData.currentTurn + 1,
+    // Call the playerAgent
+    const playerResponseObj = await playerAgent({
+      playerState: {
+        handle: currentPlayer.handle,
+        prompt: playerPrompt,
       },
-    })
-    .where(eq(gamesTable.id, gameId));
+      gameState: {
+        id: game.id,
+        currentTurn,
+        activePlayers: game.currentData.activePlayers,
+        gameHistory,
+      },
+    });
 
-  return responseText;
+    // Extract the text from the response
+    const playerResponse = playerResponseObj.text || "";
+
+    // Add player's message
+    await addGameMessage(gameId, currentPlayer.handle, playerResponse);
+
+    // Extract tagged players from player's message
+    const nextPlayerHandle =
+      extractNextTaggedPlayer(
+        playerResponse,
+        activePlayers,
+        currentPlayer.handle
+      ) || "GameMaster";
+
+    // Update game state
+    await db
+      .update(gamesTable)
+      .set({
+        currentData: {
+          ...game.currentData,
+          currentTurn: currentTurn + 1,
+          nextPlayer: nextPlayerHandle,
+        },
+      })
+      .where(eq(gamesTable.id, gameId));
+
+    response = playerResponse;
+  }
+
+  return response;
 }
 
 // End the game and distribute rewards
@@ -351,12 +398,6 @@ export async function endGame(gameId: number, winnerId: number) {
     "GameMaster",
     `Game Over! ${winner.handle} is the winner and receives ${winnerReward} tokens!`
   );
-
-  return {
-    gameId,
-    winner: winner.handle,
-    reward: winnerReward,
-  };
 }
 
 // Get a summary of the game
@@ -404,4 +445,32 @@ export async function getGameSummary(gameId: number) {
     messagesByPlayer,
     isGameOver: !!game.winner || currentPlayerCount <= 1,
   };
+}
+
+// Extract all tagged players from a message
+function extractNextTaggedPlayer(
+  message: string,
+  activePlayers: { userId: number; handle: string }[],
+  currentPlayer: string
+): string | undefined {
+  // Look for @username pattern in the message
+  const tagRegex = /@(\w+)/g;
+  const tags = [...message.matchAll(tagRegex)].map((match) => match[1]);
+
+  // Find all tags that match active player's handle
+  const taggedPlayerHandles = tags
+    .map((tag) => {
+      const taggedPlayer = activePlayers.find(
+        (player) => player.handle.toLowerCase() === tag.toLowerCase()
+      );
+
+      if (taggedPlayer) {
+        return taggedPlayer.handle;
+      }
+
+      return null;
+    })
+    .filter((handle: string | null): handle is string => handle !== null);
+
+  return taggedPlayerHandles.find((handle) => handle !== currentPlayer);
 }

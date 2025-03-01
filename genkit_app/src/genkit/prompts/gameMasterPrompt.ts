@@ -5,13 +5,16 @@ import { ai } from "../ai";
 const gameStateSchema = z.object({
   id: z.number(),
   currentTurn: z.number(),
-  activePlayers: z.array(
+  activePlayers: z
+    .array(z.string())
+    .describe("The list of active player handles"),
+  gameMasterPrompt: z.string(),
+  gameHistory: z.array(
     z.object({
-      userId: z.number(),
       handle: z.string(),
+      message: z.string(),
     })
   ),
-  gameMasterPrompt: z.string(),
 });
 
 // Define the game master prompt
@@ -30,7 +33,7 @@ Active Players: {{gameState.activePlayers}}
 
 Game Master Prompt: {{gameState.gameMasterPrompt}}
 
-Remember to be fair, engaging, and create an interesting narrative for the players. When eliminating players, provide a compelling reason based on their performance in the game.
+Remember to be fair, engaging, and create an interesting narrative for the players.
 `;
 
 // Create the game master agent using the latest GenKit API
