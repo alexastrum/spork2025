@@ -8,8 +8,28 @@ import { playerAgent } from "./prompts/playerPrompt";
 import { kickPlayerAgent } from "./prompts/kickPlayerPrompt";
 import { eq, and, inArray } from "drizzle-orm";
 
+export type Game = {
+  id: number;
+  createdAt: Date;
+  updatedAt?: Date;
+  initData: {
+    gameMasterPrompt: string;
+    cost: number;
+    players: {
+      userId: number;
+      handle: string;
+      prompt: string;
+    }[];
+  };
+  currentData: {
+    currentTurn: number;
+    activePlayers: number[];
+  };
+  winner: number | null;
+};
+
 // Create a new game
-export async function createGame(gameCost: number = 100) {
+export async function createGame(gameCost: number = 100): Promise<Game> {
   // Get all users with enough tokens
   const users = await db.select().from(usersTable);
 
@@ -58,11 +78,11 @@ export async function createGame(gameCost: number = 100) {
       .where(eq(usersTable.id, user.id));
   }
 
-  return game;
+  return game as Game;
 }
 
 // Get game by ID
-export async function getGame(gameId: number) {
+export async function getGame(gameId: number): Promise<Game> {
   const game = await db
     .select()
     .from(gamesTable)
@@ -73,7 +93,7 @@ export async function getGame(gameId: number) {
     throw new Error(`Game with ID ${gameId} not found`);
   }
 
-  return game[0];
+  return game[0] as Game;
 }
 
 // Get messages for a game

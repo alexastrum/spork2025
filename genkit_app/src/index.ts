@@ -13,10 +13,12 @@ import {
   processPlayerTurn,
   endGame,
   getGameSummary,
+  Game,
 } from "./genkit/game";
 import { db } from "./db";
 import { usersTable } from "./db/schema";
 import { eq } from "drizzle-orm";
+import { createSampleUsers } from "./db/samples";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -162,108 +164,110 @@ app.listen(PORT, () => {
 
 // For development/testing purposes
 async function testGame() {
+  let game: Game;
   try {
     console.log("Creating a test game...");
-    const game = await createGame();
-    console.log("Game created:", game);
+    game = await createGame();
+  } catch (error: unknown) {
+    console.log("Game creation failed, creating sample users...");
+    await createSampleUsers();
+    game = await createGame();
+  }
+  console.log("Game created:", game);
 
-    let currentGame = game;
-    let isGameOver = false;
-    let turnCount = 0;
-    const maxTurns = 1000; // Safety limit to prevent infinite loops
+  let currentGame = game;
+  let isGameOver = false;
+  let turnCount = 0;
+  const maxTurns = 1000; // Safety limit to prevent infinite loops
 
-    console.log("Starting game simulation...");
-    console.log(
-      `Active players: ${currentGame.currentData.activePlayers.length}`
+  console.log("Starting game simulation...");
+  console.log(
+    `Active players: ${currentGame.currentData.activePlayers.length}`
+  );
+
+  // Continue the game until there's a winner or we reach the max turns
+  while (!isGameOver && turnCount < maxTurns) {
+    turnCount++;
+    console.log(`\n--- Turn ${turnCount} ---`);
+
+    // Process game master turn
+    const gameMasterSession = await createSession({
+      currentGameId: currentGame.id,
+      isGameMaster: true,
+    });
+
+    console.log("Processing game master turn...");
+    const gameMasterResponse = await processGameMasterTurn(
+      gameMasterSession,
+      currentGame.id,
+      true
     );
+    console.log(`Game Master: ${gameMasterResponse}`);
 
-    // Continue the game until there's a winner or we reach the max turns
-    while (!isGameOver && turnCount < maxTurns) {
-      turnCount++;
-      console.log(`\n--- Turn ${turnCount} ---`);
+    // Get updated game state
+    currentGame = await getGame(currentGame.id);
 
-      // Process game master turn
-      const gameMasterSession = await createSession({
+    // Check if the game is over after game master's turn
+    if (
+      currentGame.winner ||
+      currentGame.currentData.activePlayers.length <= 1
+    ) {
+      isGameOver = true;
+      console.log("Game over after Game Master's turn!");
+      break;
+    }
+
+    // Process a turn for each active player
+    for (const playerId of currentGame.currentData.activePlayers) {
+      const playerSession = await createSession({
         currentGameId: currentGame.id,
-        isGameMaster: true,
+        currentUserId: playerId,
+        isGameMaster: false,
       });
 
-      console.log("Processing game master turn...");
-      const gameMasterResponse = await processGameMasterTurn(
-        gameMasterSession,
+      console.log(`Processing turn for player ${playerId}...`);
+      const playerResponse = await processPlayerTurn(
+        playerSession,
         currentGame.id,
-        true
+        playerId
       );
-      console.log(`Game Master: ${gameMasterResponse}`);
+      console.log(`Player ${playerId}: ${playerResponse}`);
 
-      // Get updated game state
+      // Get updated game state after each player's turn
       currentGame = await getGame(currentGame.id);
 
-      // Check if the game is over after game master's turn
+      // Check if the game is over after this player's turn
       if (
         currentGame.winner ||
         currentGame.currentData.activePlayers.length <= 1
       ) {
         isGameOver = true;
-        console.log("Game over after Game Master's turn!");
+        console.log("Game over during player turns!");
         break;
       }
-
-      // Process a turn for each active player
-      for (const playerId of currentGame.currentData.activePlayers) {
-        const playerSession = await createSession({
-          currentGameId: currentGame.id,
-          currentUserId: playerId,
-          isGameMaster: false,
-        });
-
-        console.log(`Processing turn for player ${playerId}...`);
-        const playerResponse = await processPlayerTurn(
-          playerSession,
-          currentGame.id,
-          playerId
-        );
-        console.log(`Player ${playerId}: ${playerResponse}`);
-
-        // Get updated game state after each player's turn
-        currentGame = await getGame(currentGame.id);
-
-        // Check if the game is over after this player's turn
-        if (
-          currentGame.winner ||
-          currentGame.currentData.activePlayers.length <= 1
-        ) {
-          isGameOver = true;
-          console.log("Game over during player turns!");
-          break;
-        }
-      }
     }
-
-    // If there's a winner, end the game if it hasn't been ended already
-    if (
-      currentGame.currentData.activePlayers.length === 1 &&
-      !currentGame.winner
-    ) {
-      console.log("Ending game with the last remaining player as winner...");
-      const result = await endGame(
-        currentGame.id,
-        currentGame.currentData.activePlayers[0]
-      );
-      console.log("Game ended:", result);
-    }
-
-    // Get final game summary
-    const gameSummary = await getGameSummary(currentGame.id);
-
-    console.log("\n--- Game Summary ---");
-    console.log(JSON.stringify(gameSummary, null, 2));
-
-    return gameSummary;
-  } catch (error: unknown) {
-    console.error("Test game error:", error);
-    throw error;
   }
+
+  // If there's a winner, end the game if it hasn't been ended already
+  if (
+    currentGame.currentData.activePlayers.length === 1 &&
+    !currentGame.winner
+  ) {
+    console.log("Ending game with the last remaining player as winner...");
+    const result = await endGame(
+      currentGame.id,
+      currentGame.currentData.activePlayers[0]
+    );
+    console.log("Game ended:", result);
+  }
+
+  // Get final game summary
+  const gameSummary = await getGameSummary(currentGame.id);
+
+  console.log("\n--- Game Summary ---");
+  console.log(JSON.stringify(gameSummary, null, 2));
+
+  return gameSummary;
 }
 
 // Run test game if in development mode
