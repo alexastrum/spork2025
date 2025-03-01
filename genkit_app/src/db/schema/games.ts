@@ -31,7 +31,10 @@ export const gamesTable = pgTable("games", {
     nextPlayer: string;
     lastEliminationTurn: number;
   }>(),
-  winner: integer("winner").references(() => usersTable.id),
+  winner: integer("winner").references(() => usersTable.id, {
+    onDelete: "set null",
+    onUpdate: "cascade",
+  }),
 });
 
 // Create Zod schemas for type validation

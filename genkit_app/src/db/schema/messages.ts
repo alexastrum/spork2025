@@ -15,7 +15,10 @@ export const messagesTable = pgTable("messages", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
   gameId: integer("game_id")
     .notNull()
-    .references(() => gamesTable.id),
+    .references(() => gamesTable.id, {
+      onDelete: "cascade",
+      onUpdate: "cascade",
+    }),
   handle: text("handle").notNull(),
   message: text("message").notNull(),
 });

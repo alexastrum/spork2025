@@ -55,14 +55,6 @@ Use language appropriate to the game type when explaining the elimination:
 - For strategic games: "bankrupted", "outmaneuvered", etc.
 - For battle games: "defeated", "killed", "knocked out", etc.
 
-Your response must be in valid JSON format with the following structure:
-{
-  "playerToKick": {
-    "handle": "[player's handle]",
-    "reason": "[detailed reason for elimination]"
-  }
-}
-
 Choose wisely and provide a compelling reason for your decision that fits the game's theme.
 `;
 

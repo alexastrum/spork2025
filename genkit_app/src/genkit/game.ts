@@ -8,6 +8,15 @@ import {
   SelectMessage,
 } from "../db/schema";
 import { eq } from "drizzle-orm";
+import { kickPlayerAgent } from "./prompts/kickPlayerPrompt";
+import { withRetry, genkitRetryOptions } from "./withRetry";
+import { gameMasterAgent } from "./prompts/gameMasterPrompt";
+import { playerAgent } from "./prompts/playerPrompt";
+
+// Create retry-enabled versions of our agents
+const retryableKickPlayerAgent = withRetry(kickPlayerAgent, genkitRetryOptions);
+const retryableGameMasterAgent = withRetry(gameMasterAgent, genkitRetryOptions);
+const retryablePlayerAgent = withRetry(playerAgent, genkitRetryOptions);
 
 /**
  * Create a new game. Select random users to be players, unless userIds are provided.
@@ -28,7 +37,6 @@ export async function createGame(
 
   // Select a random game master prompt
   const gameMasterPrompt = await createSampleGameMasterPrompts();
-  console.log("GameMasterPrompt", gameMasterPrompt, "---------------");
 
   // Create the game
   const [game] = await db
@@ -150,12 +158,18 @@ export async function processGameTurn(gameId: number): Promise<string> {
   const eliminationTurn =
     currentTurn > 0 &&
     currentTurn >=
-      game.currentData.lastEliminationTurn + game.initData.players.length * 3;
+      game.currentData.lastEliminationTurn +
+        game.currentData.activePlayers.length * 2;
   let response = "";
+  console.log("EliminationTurn?", {
+    eliminationTurn,
+    currentTurn,
+    lastEliminationTurn: game.currentData.lastEliminationTurn,
+    activePlayers: game.currentData.activePlayers,
+  });
 
   if (eliminationTurn) {
     // Use the kickPlayerAgent to decide which player to eliminate
-    const { kickPlayerAgent } = await import("./prompts/kickPlayerPrompt");
 
     // Prepare game history for the prompt
     const gameHistory = messages.slice(-20).map((msg) => ({
@@ -164,7 +178,7 @@ export async function processGameTurn(gameId: number): Promise<string> {
     }));
 
     // Call the kickPlayerAgent
-    const kickResponse = await kickPlayerAgent({
+    const kickResponse = await retryableKickPlayerAgent({
       gameState: {
         id: game.id,
         currentTurn,
@@ -175,9 +189,19 @@ export async function processGameTurn(gameId: number): Promise<string> {
     });
 
     // Extract the result from the response
-    const kickResult = kickResponse.text
-      ? JSON.parse(kickResponse.text)
-      : { playerToKick: { handle: "", reason: "" } };
+    let kickResult = kickResponse.data;
+    console.log("KickResult", kickResult, "---------------");
+
+    if (!kickResult) {
+      const randomPlayer =
+        activePlayers[Math.floor(Math.random() * activePlayers.length)];
+      kickResult = {
+        playerToKick: {
+          handle: randomPlayer.handle,
+          reason: "Kicking random player",
+        },
+      };
+    }
 
     // Find the player to kick
     const playerToKick = activePlayers.find(
@@ -204,10 +228,13 @@ export async function processGameTurn(gameId: number): Promise<string> {
         .where(eq(gamesTable.id, gameId));
 
       // Add elimination message
-      const eliminationMessage = `I have decided to ${kickResult.playerToKick.reason}`;
-      await addGameMessage(gameId, "GameMaster", eliminationMessage);
+      await addGameMessage(
+        gameId,
+        "GameMaster",
+        kickResult.playerToKick.reason
+      );
 
-      response = eliminationMessage;
+      response = kickResult.playerToKick.reason;
 
       // Check if game is over after elimination
       if (updatedActivePlayers.length === 1) {
@@ -218,7 +245,7 @@ export async function processGameTurn(gameId: number): Promise<string> {
 
         if (lastPlayer) {
           await endGame(gameId, lastPlayer.userId);
-          return `Game over! Player ${lastPlayerHandle} wins!`;
+          return `${response}\n\nGame over! Player ${lastPlayerHandle} wins!`;
         }
       }
     }
@@ -236,7 +263,7 @@ export async function processGameTurn(gameId: number): Promise<string> {
     }));
 
     // Call the gameMasterAgent
-    const gameMasterResponseObj = await gameMasterAgent({
+    const gameMasterResponseObj = await retryableGameMasterAgent({
       gameState: {
         id: game.id,
         currentTurn,
@@ -308,7 +335,7 @@ export async function processGameTurn(gameId: number): Promise<string> {
     }));
 
     // Call the playerAgent
-    const playerResponseObj = await playerAgent({
+    const playerResponseObj = await retryablePlayerAgent({
       playerState: {
         handle: currentPlayer.handle,
         prompt: playerPrompt,
