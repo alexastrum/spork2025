@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1740810863652,
+      "tag": "20250301063423_brave_vanisher",
+      "breakpoints": true
+    }
+  ]
+}
