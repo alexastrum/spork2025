@@ -69,6 +69,7 @@ The application provides the following API endpoints:
 
 - `POST /api/games` - Create a new game
 - `GET /api/games/:gameId` - Get game by ID
+- `GET /api/games/:gameId/summary` - Get a summary of the game
 - `POST /api/games/:gameId/gameMaster` - Process game master turn
 - `POST /api/games/:gameId/players/:userId` - Process player turn
 - `GET /api/users` - Get all users
@@ -77,6 +78,23 @@ The application provides the following API endpoints:
 ## Player Elimination
 
 The game now uses GenKit to intelligently decide which player to eliminate based on their performance in the game. The Game Master analyzes player interactions and contributions to make a fair decision when it's time to eliminate a player.
+
+The elimination process works as follows:
+
+1. Every 100 turns (configurable for testing), the Game Master evaluates all players
+2. The Game Master considers factors such as quality of contributions, adherence to rules, creativity, and strategic decisions
+3. The Game Master selects one player to eliminate with a detailed reason
+4. The eliminated player is removed from the active players list
+
+## Game Simulation
+
+In development mode, the application includes a test game simulation that runs automatically:
+
+1. A new game is created with all eligible users
+2. The Game Master and players take turns until there's a winner
+3. For testing purposes, player elimination happens every 10 turns instead of 100
+4. The game continues until only one player remains or the maximum number of turns is reached
+5. A detailed game summary is displayed at the end
 
 ## Development
 
