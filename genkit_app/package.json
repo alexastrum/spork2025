@@ -5,7 +5,7 @@
   "main": "src/index.ts",
   "scripts": {
     "start": "ts-node src/index.ts",
-    "dev": "genkit start -- nodemon src/index.ts",
+    "dev": "NODE_ENV=development genkit start -- nodemon src/index.ts",
     "build": "tsc",
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio",
@@ -14,16 +14,20 @@
   "dependencies": {
     "@genkit-ai/googleai": "^1.0.5",
     "@supabase/supabase-js": "^2.48.1",
+    "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "drizzle-kit": "^0.30.4",
     "drizzle-orm": "^0.39.3",
     "drizzle-zod": "^0.7.0",
+    "express": "^4.19.2",
     "genkit": "^1.0.5",
     "pg": "^8.13.3",
     "typescript": "^5.7.3",
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
     "@types/node": "^22.13.5",
     "@types/pg": "^8.11.11",
     "genkit-cli": "^1.0.5",

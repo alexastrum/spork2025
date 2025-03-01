@@ -5,6 +5,7 @@ import { gameMasterPrompts } from "../db/samples";
 import { SessionState } from "./session";
 import { gameMasterAgent } from "./prompts/gameMasterPrompt";
 import { playerAgent } from "./prompts/playerPrompt";
+import { kickPlayerAgent } from "./prompts/kickPlayerPrompt";
 import { eq, and, inArray } from "drizzle-orm";
 
 // Create a new game
@@ -100,15 +101,18 @@ export async function addGameMessage(
 // Process game master turn
 export async function processGameMasterTurn(
   session: Session<SessionState>,
-  gameId: number
+  gameId: number,
+  isTesting: boolean = false
 ) {
   const game = await getGame(gameId);
   const messages = await getGameMessages(gameId);
 
-  // Check if we need to eliminate a player (every 100 turns)
+  // Check if we need to eliminate a player
+  // In testing mode, eliminate every 10 turns instead of 100
+  const eliminationInterval = isTesting ? 10 : 100;
   const shouldEliminatePlayer =
     game.currentData.currentTurn > 0 &&
-    game.currentData.currentTurn % 100 === 0;
+    game.currentData.currentTurn % eliminationInterval === 0;
 
   // Get active players
   const activePlayers = await db
@@ -142,11 +146,47 @@ export async function processGameMasterTurn(
 
   // If we need to eliminate a player and there are more than 2 players
   if (shouldEliminatePlayer && game.currentData.activePlayers.length > 2) {
-    // Remove a random player (in a real implementation, this would be based on game performance)
-    const playerToRemoveIndex = Math.floor(
-      Math.random() * updatedActivePlayers.length
-    );
-    updatedActivePlayers.splice(playerToRemoveIndex, 1);
+    // Get recent game history for context
+    const recentMessages = await db
+      .select()
+      .from(messagesTable)
+      .where(eq(messagesTable.gameId, gameId))
+      .orderBy(messagesTable.createdAt)
+      .limit(20);
+
+    // Format messages for the kick player agent
+    const gameHistory = recentMessages.map((msg) => ({
+      handle: msg.handle,
+      message: msg.message,
+    }));
+
+    // Use the kick player agent to decide which player to eliminate
+    const kickDecision = await kickPlayerAgent({
+      gameState: {
+        id: game.id,
+        currentTurn: game.currentData.currentTurn,
+        activePlayers: activePlayerInfo,
+        gameMasterPrompt: game.initData.gameMasterPrompt,
+        gameHistory,
+      },
+    });
+
+    // Extract the player to kick from the decision
+    const playerToKick = kickDecision.output?.playerToKick;
+
+    if (playerToKick) {
+      // Remove the player from active players
+      updatedActivePlayers = updatedActivePlayers.filter(
+        (playerId) => playerId !== playerToKick.userId
+      );
+
+      // Add elimination message to the game
+      await addGameMessage(
+        gameId,
+        "GameMaster",
+        `I have decided to eliminate @${playerToKick.handle} from the game. ${playerToKick.reason}`
+      );
+    }
   }
 
   await db
@@ -296,5 +336,52 @@ export async function endGame(gameId: number, winnerId: number) {
     gameId,
     winner: winner.handle,
     reward: winnerReward,
+  };
+}
+
+// Get a summary of the game
+export async function getGameSummary(gameId: number) {
+  const game = await getGame(gameId);
+  const messages = await getGameMessages(gameId);
+
+  // Get winner info if there is one
+  let winnerInfo = null;
+  if (game.winner) {
+    const [winner] = await db
+      .select()
+      .from(usersTable)
+      .where(eq(usersTable.id, game.winner));
+
+    if (winner) {
+      winnerInfo = {
+        userId: winner.id,
+        handle: winner.handle,
+        tokens: winner.data.tokens,
+      };
+    }
+  }
+
+  // Count messages per player
+  const messagesByPlayer = messages.reduce((acc, msg) => {
+    acc[msg.handle] = (acc[msg.handle] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+
+  // Get initial player count
+  const initialPlayerCount = game.initData.players.length;
+
+  // Get current player count
+  const currentPlayerCount = game.currentData.activePlayers.length;
+
+  return {
+    gameId: game.id,
+    createdAt: game.createdAt,
+    totalTurns: game.currentData.currentTurn,
+    initialPlayerCount,
+    currentPlayerCount,
+    winner: winnerInfo,
+    messageCount: messages.length,
+    messagesByPlayer,
+    isGameOver: !!game.winner || currentPlayerCount <= 1,
   };
 }
